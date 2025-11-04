@@ -3,11 +3,17 @@ from pydantic import BaseModel
 import joblib
 import pandas as pd
 import numpy as np
+from fastapi.responses import JSONResponse
 
 app = FastAPI()
 
 # Load trained model
 model = joblib.load("loan_model.pkl")
+
+# Root route for health check
+@app.get("/")
+def home():
+    return JSONResponse(content={"message": "Loan Eligibility API is running ✅"})
 
 # Define input schema
 class LoanInput(BaseModel):
