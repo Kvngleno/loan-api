@@ -1,0 +1,47 @@
+from fastapi import FastAPI
+from pydantic import BaseModel
+import joblib
+import pandas as pd
+import numpy as np
+
+app = FastAPI()
+
+# Load trained model
+model = joblib.load("loan_model.pkl")
+
+# Define input schema
+class LoanInput(BaseModel):
+    Gender: str
+    Married: str
+    Dependents: str
+    Education: str
+    Self_Employed: str
+    ApplicantIncome: float
+    CoapplicantIncome: float
+    LoanAmount: float
+    Loan_Amount_Term: float
+    Credit_History: float
+    Property_Area: str
+
+@app.post("/predict")
+def predict(data: LoanInput):
+    # Convert input to DataFrame
+    df = pd.DataFrame([data.dict()])
+
+    # Feature engineering
+    df["Total_Income"] = df["ApplicantIncome"] + df["CoapplicantIncome"]
+    df["LoanAmount_log"] = np.log(df["LoanAmount"] + 1)
+    df["Total_Income_log"] = np.log(df["Total_Income"] + 1)
+
+    # Encode categorical variables
+    df = pd.get_dummies(df)
+
+    # Match model training columns
+    model_features = list(model.feature_names_in_)
+    df = df.reindex(columns=model_features, fill_value=0)
+
+    # Predict
+    prediction = model.predict(df)[0]
+    result = "Approved" if prediction == 1 else "Rejected"
+
+    return {"Loan_Status": result}
