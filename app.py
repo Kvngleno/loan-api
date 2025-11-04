@@ -48,6 +48,19 @@ def predict(data: LoanInput):
 
     # Predict
     prediction = model.predict(df)[0]
-    result = "Approved" if prediction == 1 else "Rejected"
+    result = "Approved" if prediction == 1 else "Not Approved"
 
-    return {"Loan_Status": result}
+    # Get confidence score if model supports it
+    try:
+        confidence = float(np.max(model.predict_proba(df)))
+    except AttributeError:
+        confidence = None  # Model does not support predict_proba
+
+    # Placeholder for SHAP values (can compute later)
+    shap_values = {col: 0.0 for col in df.columns}  # default zero
+
+    return {
+        "eligibilityStatus": result,
+        "confidence": confidence,
+        "shapValues": shap_values
+    }
