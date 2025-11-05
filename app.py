@@ -4,6 +4,7 @@ import joblib
 import pandas as pd
 import numpy as np
 from fastapi.responses import JSONResponse
+import shap
 
 app = FastAPI()
 
@@ -50,14 +51,23 @@ def predict(data: LoanInput):
     prediction = model.predict(df)[0]
     result = "Approved" if prediction == 1 else "Not Approved"
 
-    # Get confidence score if model supports it
+    # Get confidence score (if supported)
     try:
         confidence = float(np.max(model.predict_proba(df)))
     except AttributeError:
-        confidence = None  # Model does not support predict_proba
+        confidence = None  # Some models (like SVM without probability) don't support it
 
-    # Placeholder for SHAP values (can compute later)
-    shap_values = {col: 0.0 for col in df.columns}  # default zero
+    # Compute SHAP values safely
+    try:
+        explainer = shap.Explainer(model, df)
+        shap_values_raw = explainer(df)
+        shap_values = {
+            feature: float(shap_values_raw.values[0][i])
+            for i, feature in enumerate(df.columns)
+        }
+    except Exception:
+        # Fallback: if SHAP not supported, return zeros
+        shap_values = {feature: 0.0 for feature in df.columns}
 
     return {
         "eligibilityStatus": result,
