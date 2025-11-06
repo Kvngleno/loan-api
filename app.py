@@ -11,17 +11,20 @@ app = FastAPI()
 # Load trained model
 model = joblib.load("loan_model.pkl")
 
-# Load training data for SHAP background (add your actual training data file)
+# Load training data for SHAP background (optional but helpful)
 try:
-    train_data = pd.read_csv("train_u6lujuX_CVtuZ9i")  # Use your processed training file
+    train_data = pd.read_csv("train_u6lujuX_CVtuZ9i")  # Replace with actual dataset filename
     background = shap.sample(train_data.drop('Loan_Status', axis=1, errors='ignore'), 100)
-except:
+except Exception as e:
+    print(f"Background data load error: {e}")
     background = None
+
 
 # Root route for health check
 @app.get("/")
 def home():
     return JSONResponse(content={"message": "Loan Eligibility API is running ✅"})
+
 
 # Define input schema
 class LoanInput(BaseModel):
@@ -36,6 +39,7 @@ class LoanInput(BaseModel):
     Loan_Amount_Term: float
     Credit_History: float
     Property_Area: str
+
 
 @app.post("/predict")
 def predict(data: LoanInput):
@@ -54,27 +58,31 @@ def predict(data: LoanInput):
     model_features = list(model.feature_names_in_)
     df = df.reindex(columns=model_features, fill_value=0)
 
-    # Predict
+    # Make prediction
     prediction = model.predict(df)[0]
     result = "Approved" if prediction == 1 else "Not Approved"
 
-    # Get confidence score
+    # Get confidence score if available
     try:
         confidence = float(np.max(model.predict_proba(df)))
     except AttributeError:
         confidence = None
 
-    # Compute SHAP values with TreeExplainer
+    # Compute SHAP values dynamically (handles linear + tree models)
     try:
-        explainer = shap.TreeExplainer(model, background if background is not None else df)
-        shap_values_raw = explainer.shap_values(df)
-        
-        # Handle both binary and multiclass output
+        if hasattr(model, "coef_"):  # Linear/Logistic Regression
+            explainer = shap.LinearExplainer(model, df, feature_perturbation="interventional")
+            shap_values_raw = explainer.shap_values(df)
+        else:  # Tree-based models (RF, XGB, etc.)
+            explainer = shap.TreeExplainer(model, background if background is not None else df)
+            shap_values_raw = explainer.shap_values(df)
+
+        # Handle binary vs multiclass outputs
         if isinstance(shap_values_raw, list):
-            shap_vals = shap_values_raw[1][0]  # Use positive class
+            shap_vals = shap_values_raw[1][0]  # positive class
         else:
             shap_vals = shap_values_raw[0]
-            
+
         shap_values = {
             feature: float(shap_vals[i])
             for i, feature in enumerate(df.columns)
