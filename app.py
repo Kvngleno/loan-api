@@ -64,17 +64,16 @@ def predict(data: LoanInput):
     prediction = model.predict(df)[0]
     result = "Approved" if prediction == 1 else "Not Approved"
 
-    # Confidence
+    # Confidence score
     try:
         confidence = float(np.max(model.predict_proba(df)))
     except AttributeError:
         confidence = None
 
-    # ✅ Fix SHAP explanation
+    # SHAP explanation
     shap_values = {}
     try:
-        if hasattr(model, "coef_"):
-            # Align background perfectly
+        if hasattr(model, "coef_"):  # Linear models
             if background is not None:
                 background_aligned = background.reindex(columns=model_features, fill_value=0)
                 explainer = shap.LinearExplainer(model, masker=background_aligned)
@@ -88,8 +87,7 @@ def predict(data: LoanInput):
                 for i, feature in enumerate(df.columns)
             }
 
-        else:
-            # For tree models
+        else:  # Tree models
             background_aligned = background.reindex(columns=model_features, fill_value=0) if background is not None else df
             explainer = shap.TreeExplainer(model, background_aligned)
             shap_vals = explainer.shap_values(df)
@@ -99,16 +97,33 @@ def predict(data: LoanInput):
                 for i, feature in enumerate(df.columns)
             }
 
-        # ✅ Sort SHAP values by absolute magnitude (so you can see strongest impact)
-        shap_values = dict(sorted(shap_values.items(), key=lambda x: abs(x[1]), reverse=True))
+        # ✅ Only include these 5 key SHAP features (in fixed order)
+        selected_features = [
+            "LoanAmount_log",
+            "Total_Income_log",
+            "Total_Income",
+            "ApplicantIncome",
+            "CoapplicantIncome"
+        ]
+
+        top_shap_values = {
+            feature: round(float(shap_values.get(feature, 0.0)), 6)
+            for feature in selected_features
+        }
 
     except Exception as e:
         print(f"SHAP error: {e}")
-        shap_values = {feature: 0.0 for feature in df.columns}
+        top_shap_values = {
+            "LoanAmount_log": 0.0,
+            "Total_Income_log": 0.0,
+            "Total_Income": 0.0,
+            "ApplicantIncome": 0.0,
+            "CoapplicantIncome": 0.0
+        }
 
     return {
         "eligibilityStatus": result,
         "confidence": confidence,
-        "shapValues": shap_values
+        "topShapValues": top_shap_values
     }
 
