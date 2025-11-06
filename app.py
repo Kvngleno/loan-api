@@ -3,6 +3,7 @@ from pydantic import BaseModel
 import joblib
 import pandas as pd
 import numpy as np
+import math
 from fastapi.responses import JSONResponse
 import shap
 
@@ -11,22 +12,24 @@ app = FastAPI()
 # Load trained model
 model = joblib.load("loan_model.pkl")
 
-# Load training data for SHAP background (optional but helpful)
+# Load background data for SHAP
 try:
-    train_data = pd.read_csv("train_u6lujuX_CVtuZ9i")  # Replace with actual dataset filename
-    background = shap.sample(train_data.drop('Loan_Status', axis=1, errors='ignore'), 100)
+    train_data = pd.read_csv("train_u6lujuX_CVtuZ9i.csv")
+    if 'Loan_Status' in train_data.columns:
+        background = train_data.drop('Loan_Status', axis=1)
+    else:
+        background = train_data.copy()
+    background = pd.get_dummies(background)
 except Exception as e:
     print(f"Background data load error: {e}")
     background = None
 
 
-# Root route for health check
 @app.get("/")
 def home():
     return JSONResponse(content={"message": "Loan Eligibility API is running ✅"})
 
 
-# Define input schema
 class LoanInput(BaseModel):
     Gender: str
     Married: str
@@ -43,7 +46,6 @@ class LoanInput(BaseModel):
 
 @app.post("/predict")
 def predict(data: LoanInput):
-    # Convert input to DataFrame
     df = pd.DataFrame([data.dict()])
 
     # Feature engineering
@@ -54,7 +56,7 @@ def predict(data: LoanInput):
     # Encode categorical variables
     df = pd.get_dummies(df)
 
-    # Match model training columns
+    # Align with model features
     model_features = list(model.feature_names_in_)
     df = df.reindex(columns=model_features, fill_value=0)
 
@@ -62,31 +64,44 @@ def predict(data: LoanInput):
     prediction = model.predict(df)[0]
     result = "Approved" if prediction == 1 else "Not Approved"
 
-    # Get confidence score if available
+    # Confidence
     try:
         confidence = float(np.max(model.predict_proba(df)))
     except AttributeError:
         confidence = None
 
-    # Compute SHAP values dynamically (handles linear + tree models)
+    # ✅ Fix SHAP explanation
+    shap_values = {}
     try:
-        if hasattr(model, "coef_"):  # Linear/Logistic Regression
-            explainer = shap.LinearExplainer(model, df, feature_perturbation="interventional")
-            shap_values_raw = explainer.shap_values(df)
-        else:  # Tree-based models (RF, XGB, etc.)
-            explainer = shap.TreeExplainer(model, background if background is not None else df)
-            shap_values_raw = explainer.shap_values(df)
+        if hasattr(model, "coef_"):
+            # Align background perfectly
+            if background is not None:
+                background_aligned = background.reindex(columns=model_features, fill_value=0)
+                explainer = shap.LinearExplainer(model, masker=background_aligned)
+            else:
+                explainer = shap.LinearExplainer(model, masker=df)
 
-        # Handle binary vs multiclass outputs
-        if isinstance(shap_values_raw, list):
-            shap_vals = shap_values_raw[1][0]  # positive class
+            shap_vals = explainer(df)
+            raw_values = shap_vals.values[0] if hasattr(shap_vals, "values") else shap_vals[0]
+            shap_values = {
+                feature: float(raw_values[i]) if not (math.isnan(raw_values[i]) or math.isinf(raw_values[i])) else 0.0
+                for i, feature in enumerate(df.columns)
+            }
+
         else:
-            shap_vals = shap_values_raw[0]
+            # For tree models
+            background_aligned = background.reindex(columns=model_features, fill_value=0) if background is not None else df
+            explainer = shap.TreeExplainer(model, background_aligned)
+            shap_vals = explainer.shap_values(df)
+            shap_output = shap_vals[1][0] if isinstance(shap_vals, list) else shap_vals[0]
+            shap_values = {
+                feature: float(shap_output[i]) if not (math.isnan(shap_output[i]) or math.isinf(shap_output[i])) else 0.0
+                for i, feature in enumerate(df.columns)
+            }
 
-        shap_values = {
-            feature: float(shap_vals[i])
-            for i, feature in enumerate(df.columns)
-        }
+        # ✅ Sort SHAP values by absolute magnitude (so you can see strongest impact)
+        shap_values = dict(sorted(shap_values.items(), key=lambda x: abs(x[1]), reverse=True))
+
     except Exception as e:
         print(f"SHAP error: {e}")
         shap_values = {feature: 0.0 for feature in df.columns}
@@ -96,3 +111,4 @@ def predict(data: LoanInput):
         "confidence": confidence,
         "shapValues": shap_values
     }
+
