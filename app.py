@@ -11,6 +11,13 @@ app = FastAPI()
 # Load trained model
 model = joblib.load("loan_model.pkl")
 
+# Load training data for SHAP background (add your actual training data file)
+try:
+    train_data = pd.read_csv("train_u6lujuX_CVtuZ9i")  # Use your processed training file
+    background = shap.sample(train_data.drop('Loan_Status', axis=1, errors='ignore'), 100)
+except:
+    background = None
+
 # Root route for health check
 @app.get("/")
 def home():
@@ -51,22 +58,29 @@ def predict(data: LoanInput):
     prediction = model.predict(df)[0]
     result = "Approved" if prediction == 1 else "Not Approved"
 
-    # Get confidence score (if supported)
+    # Get confidence score
     try:
         confidence = float(np.max(model.predict_proba(df)))
     except AttributeError:
-        confidence = None  # Some models (like SVM without probability) don't support it
+        confidence = None
 
-    # Compute SHAP values safely
+    # Compute SHAP values with TreeExplainer
     try:
-        explainer = shap.Explainer(model, df)
-        shap_values_raw = explainer(df)
+        explainer = shap.TreeExplainer(model, background if background is not None else df)
+        shap_values_raw = explainer.shap_values(df)
+        
+        # Handle both binary and multiclass output
+        if isinstance(shap_values_raw, list):
+            shap_vals = shap_values_raw[1][0]  # Use positive class
+        else:
+            shap_vals = shap_values_raw[0]
+            
         shap_values = {
-            feature: float(shap_values_raw.values[0][i])
+            feature: float(shap_vals[i])
             for i, feature in enumerate(df.columns)
         }
-    except Exception:
-        # Fallback: if SHAP not supported, return zeros
+    except Exception as e:
+        print(f"SHAP error: {e}")
         shap_values = {feature: 0.0 for feature in df.columns}
 
     return {
